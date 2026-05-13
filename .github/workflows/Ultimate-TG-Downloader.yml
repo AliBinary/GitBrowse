@@ -1,0 +1,548 @@
+# ================================
+# Ultimate Telegram Downloader
+# Multi-Resolver + Multi-Downloader
+# GitHub Actions Edition
+# ================================
+
+name: 📲 Ultimate Telegram Downloader
+
+on:
+  workflow_dispatch:
+    inputs:
+      telegram_links:
+        description: '🔗 Telegram links (comma / space / newline separated)'
+        required: true
+        type: string
+
+      password:
+        description: '🔐 Optional archive password'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: 📂 Checkout
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Install dependencies
+        run: |
+          sudo apt-get update -qq
+
+          sudo apt-get install -y \
+            curl \
+            wget \
+            jq \
+            aria2 \
+            p7zip-full \
+            unzip \
+            zip \
+            ffmpeg \
+            python3 \
+            python3-pip
+
+          pip3 install --upgrade pip
+
+          pip3 install \
+            requests \
+            aiohttp \
+            yt-dlp
+
+          echo "✅ Dependencies installed"
+
+      - name: 📁 Prepare workspace
+        run: |
+          mkdir -p downloads
+          mkdir -p temp
+
+      - name: 📋 Resolve Telegram URLs
+        run: |
+          python3 << 'PYEOF'
+          import os
+          import re
+          import json
+          import urllib.parse
+          import subprocess
+          import requests
+          from bs4 import BeautifulSoup
+
+          raw_input = """${{ github.event.inputs.telegram_links }}"""
+
+          links = re.split(r'[\s,\n]+', raw_input)
+
+          links = [
+              l.strip()
+              for l in links
+              if l.strip().startswith("http")
+          ]
+
+          # Remove duplicates
+          seen = set()
+          unique_links = []
+
+          for link in links:
+              if link not in seen:
+                  seen.add(link)
+                  unique_links.append(link)
+
+          print(f"✅ Total unique links: {len(unique_links)}")
+
+          resolved = []
+          failed = []
+
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0"
+          }
+
+          def try_telegramdownloader(link):
+              try:
+                  encoded = urllib.parse.quote(link)
+
+                  r = requests.post(
+                      "https://telegramdownloader.net/proxy.php",
+                      headers={
+                          **HEADERS,
+                          "Content-Type": "application/x-www-form-urlencoded"
+                      },
+                      data=f"telegram_link={encoded}",
+                      timeout=30
+                  )
+
+                  data = r.json()
+
+                  raw = data.get("data", {}).get("data", {}).get("link")
+                  name = data.get("data", {}).get("data", {}).get("file_name")
+
+                  if raw:
+                      return raw, name
+              except:
+                  pass
+
+              return None, None
+
+          def try_tgsave(link):
+              try:
+                  r = requests.post(
+                      "https://api.tgsave.com/download",
+                      headers={
+                          **HEADERS,
+                          "Content-Type": "application/json"
+                      },
+                      json={"url": link},
+                      timeout=30
+                  )
+
+                  data = r.json()
+
+                  raw = (
+                      data.get("url")
+                      or data.get("link")
+                      or data.get("download_url")
+                  )
+
+                  name = (
+                      data.get("filename")
+                      or data.get("file_name")
+                      or data.get("name")
+                  )
+
+                  if raw:
+                      return raw, name
+
+              except:
+                  pass
+
+              return None, None
+
+          def try_html_scrape(link):
+              try:
+                  r = requests.get(
+                      link,
+                      headers=HEADERS,
+                      timeout=30
+                  )
+
+                  html = r.text
+
+                  patterns = [
+                      r'https://cdn[0-9]*\.telesco\.pe/file/[^\s"\']+',
+                      r'https://[^"\']+\.(mp4|mkv|mov|pdf|zip|rar|7z|mp3|jpg|png)[^"\']*'
+                  ]
+
+                  for p in patterns:
+                      m = re.search(p, html)
+
+                      if m:
+                          url = m.group(0)
+
+                          name = url.split("/")[-1].split("?")[0]
+
+                          return url, name
+
+                  soup = BeautifulSoup(html, "html.parser")
+
+                  meta_video = soup.find("meta", property="og:video")
+                  if meta_video:
+                      url = meta_video.get("content")
+                      if url:
+                          return url, url.split("/")[-1]
+
+                  meta_image = soup.find("meta", property="og:image")
+                  if meta_image:
+                      url = meta_image.get("content")
+                      if url:
+                          return url, url.split("/")[-1]
+
+              except:
+                  pass
+
+              return None, None
+
+          def try_ytdlp_resolve(link):
+              try:
+                  result = subprocess.run(
+                      [
+                          "yt-dlp",
+                          "--get-url",
+                          link
+                      ],
+                      capture_output=True,
+                      text=True,
+                      timeout=60
+                  )
+
+                  if result.returncode == 0:
+                      url = result.stdout.strip()
+
+                      if url.startswith("http"):
+                          return url, None
+
+              except:
+                  pass
+
+              return None, None
+
+          resolvers = [
+              ("telegramdownloader", try_telegramdownloader),
+              ("tgsave", try_tgsave),
+              ("html_scrape", try_html_scrape),
+              ("yt-dlp", try_ytdlp_resolve),
+          ]
+
+          for idx, link in enumerate(unique_links, 1):
+
+              print("\n" + "="*60)
+              print(f"[{idx}/{len(unique_links)}] {link}")
+              print("="*60)
+
+              success = False
+
+              for resolver_name, resolver in resolvers:
+
+                  print(f"🔍 Trying resolver: {resolver_name}")
+
+                  raw_url, file_name = resolver(link)
+
+                  if raw_url:
+
+                      print(f"✅ Success via {resolver_name}")
+
+                      if not file_name:
+                          file_name = raw_url.split("/")[-1].split("?")[0]
+
+                      resolved.append({
+                          "telegram_link": link,
+                          "download_url": raw_url,
+                          "file_name": file_name,
+                          "resolver": resolver_name
+                      })
+
+                      success = True
+                      break
+
+                  else:
+                      print(f"⚠️ Failed: {resolver_name}")
+
+              if not success:
+                  failed.append(link)
+
+          with open("/tmp/resolved.json", "w") as f:
+              json.dump(resolved, f)
+
+          with open("/tmp/failed_links.json", "w") as f:
+              json.dump(failed, f)
+
+          print("\n========================")
+          print("📊 RESOLVE SUMMARY")
+          print("========================")
+          print(f"✅ Resolved: {len(resolved)}")
+          print(f"❌ Failed: {len(failed)}")
+
+          if not resolved:
+              raise Exception("No links resolved")
+          PYEOF
+
+      - name: ⬇️ Download Files
+        run: |
+          python3 << 'PYEOF'
+          import os
+          import re
+          import json
+          import asyncio
+          import aiohttp
+          import hashlib
+          import subprocess
+          import requests
+
+          with open("/tmp/resolved.json", "r") as f:
+              items = json.load(f)
+
+          os.makedirs("downloads", exist_ok=True)
+
+          def sanitize(name):
+              name = name.split("?")[0]
+              name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+
+              if not name:
+                  name = hashlib.md5(name.encode()).hexdigest()
+
+              return name[:180]
+
+          async def aio_download(url, path):
+
+              try:
+                  timeout = aiohttp.ClientTimeout(total=7200)
+
+                  async with aiohttp.ClientSession(timeout=timeout) as session:
+
+                      async with session.get(url) as resp:
+
+                          if resp.status != 200:
+                              return False
+
+                          with open(path, "wb") as f:
+                              async for chunk in resp.content.iter_chunked(1024*1024):
+                                  f.write(chunk)
+
+                  return os.path.exists(path)
+
+              except:
+                  return False
+
+          def download_requests(url, path):
+
+              try:
+                  r = requests.get(
+                      url,
+                      stream=True,
+                      timeout=120
+                  )
+
+                  with open(path, "wb") as f:
+                      for chunk in r.iter_content(chunk_size=1024*1024):
+                          if chunk:
+                              f.write(chunk)
+
+                  return os.path.exists(path)
+
+              except:
+                  return False
+
+          def run_cmd(cmd, path):
+
+              try:
+                  subprocess.run(
+                      cmd,
+                      timeout=7200,
+                      check=True
+                  )
+
+                  return os.path.exists(path)
+
+              except:
+                  return False
+
+          downloaded = []
+          failed = []
+
+          for idx, item in enumerate(items, 1):
+
+              url = item["download_url"]
+
+              filename = sanitize(item["file_name"])
+
+              folder = os.path.join(
+                  "downloads",
+                  os.path.splitext(filename)[0]
+              )
+
+              os.makedirs(folder, exist_ok=True)
+
+              path = os.path.join(folder, filename)
+
+              print("\n" + "="*60)
+              print(f"⬇️ [{idx}/{len(items)}] {filename}")
+              print("="*60)
+
+              methods = [
+
+                  (
+                      "curl",
+                      lambda:
+                      run_cmd([
+                          "curl",
+                          "-L",
+                          "-o",
+                          path,
+                          url
+                      ], path)
+                  ),
+
+                  (
+                      "wget",
+                      lambda:
+                      run_cmd([
+                          "wget",
+                          "-O",
+                          path,
+                          url
+                      ], path)
+                  ),
+
+                  (
+                      "aria2c",
+                      lambda:
+                      run_cmd([
+                          "aria2c",
+                          "--dir",
+                          folder,
+                          "--out",
+                          filename,
+                          url
+                      ], path)
+                  ),
+
+                  (
+                      "yt-dlp",
+                      lambda:
+                      run_cmd([
+                          "yt-dlp",
+                          "-o",
+                          path,
+                          url
+                      ], path)
+                  ),
+
+                  (
+                      "python_requests",
+                      lambda:
+                      download_requests(url, path)
+                  ),
+
+                  (
+                      "aiohttp",
+                      lambda:
+                      asyncio.run(aio_download(url, path))
+                  ),
+
+              ]
+
+              success = False
+
+              for method_name, method in methods:
+
+                  print(f"🔄 Trying: {method_name}")
+
+                  try:
+
+                      if os.path.exists(path):
+                          os.remove(path)
+
+                      ok = method()
+
+                      if ok and os.path.getsize(path) > 1024:
+
+                          size_mb = os.path.getsize(path) / (1024*1024)
+
+                          print(f"✅ Success via {method_name}")
+                          print(f"📦 Size: {size_mb:.2f} MB")
+
+                          downloaded.append({
+                              "filename": filename,
+                              "folder": folder,
+                              "size_mb": round(size_mb, 2),
+                              "method": method_name,
+                              "telegram_link": item["telegram_link"]
+                          })
+
+                          success = True
+                          break
+
+                      else:
+                          print(f"⚠️ Failed via {method_name}")
+
+                  except Exception as e:
+                      print(f"⚠️ Error: {e}")
+
+              if not success:
+
+                  failed.append({
+                      "filename": filename,
+                      "telegram_link": item["telegram_link"]
+                  })
+
+          with open("/tmp/downloaded.json", "w") as f:
+              json.dump(downloaded, f)
+
+          with open("/tmp/failed_downloads.json", "w") as f:
+              json.dump(failed, f)
+
+          print("\n========================")
+          print("📊 DOWNLOAD SUMMARY")
+          print("========================")
+          print(f"✅ Downloaded: {len(downloaded)}")
+          print(f"❌ Failed: {len(failed)}")
+
+          if not downloaded:
+              raise Exception("No successful downloads")
+          PYEOF
+
+      - name: 📦 Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-downloads
+          path: downloads/
+          retention-days: 7
+          compression-level: 0
+
+      - name: 📋 Final Report
+        if: always()
+        run: |
+          echo ""
+          echo "======================================="
+          echo "📲 Ultimate Telegram Downloader"
+          echo "======================================="
+
+          if [ -f "/tmp/downloaded.json" ]; then
+            COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/downloaded.json'))))")
+            echo "✅ Downloaded: $COUNT"
+          fi
+
+          if [ -f "/tmp/failed_downloads.json" ]; then
+            FAIL=$(python3 -c "import json; print(len(json.load(open('/tmp/failed_downloads.json'))))")
+            echo "❌ Failed: $FAIL"
+          fi
+
+          echo ""
+          echo "📦 Delivery Method:"
+          echo "GitHub Artifacts"
+          echo ""
+
+          find downloads -type f -exec ls -lh {} \;

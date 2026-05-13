@@ -77,6 +77,10 @@ jobs:
 
           raw_input = """${{ github.event.inputs.telegram_links }}"""
 
+          # =====================================================
+          # INPUT LINKS
+          # =====================================================
+
           links = re.split(r'[\s,\n]+', raw_input)
 
           links = [
@@ -96,6 +100,81 @@ jobs:
 
           print(f"✅ Total unique links: {len(unique_links)}")
 
+          # =====================================================
+          # URL FILTERING
+          # =====================================================
+
+          BAD_PATTERNS = (
+              "data:image",
+              "svg+xml",
+              "base64,",
+              "blob:",
+              "javascript:",
+              "emoji",
+              "/emoji/",
+              "placeholder",
+          )
+
+          VALID_EXTENSIONS = (
+              ".mp4",
+              ".mkv",
+              ".mov",
+              ".avi",
+              ".zip",
+              ".rar",
+              ".7z",
+              ".pdf",
+              ".mp3",
+              ".wav",
+              ".flac",
+              ".jpg",
+              ".jpeg",
+              ".png",
+              ".webp",
+              ".epub",
+              ".txt",
+              ".doc",
+              ".docx",
+              ".xlsx",
+              ".pptx",
+          )
+
+          def is_valid_download_url(url):
+
+              if not url:
+                  return False
+
+              url = url.strip()
+
+              if not (
+                  url.startswith("http://")
+                  or
+                  url.startswith("https://")
+              ):
+                  return False
+
+              lower = url.lower()
+
+              for bad in BAD_PATTERNS:
+                  if bad in lower:
+                      return False
+
+              return True
+
+          def clean_filename(name):
+
+              if not name:
+                  return None
+
+              name = name.split("?")[0]
+              name = os.path.basename(name)
+
+              return name[:180]
+
+          # =====================================================
+          # RESOLVERS
+          # =====================================================
+
           resolved = []
           failed = []
 
@@ -104,7 +183,9 @@ jobs:
           }
 
           def try_telegramdownloader(link):
+
               try:
+
                   encoded = urllib.parse.quote(link)
 
                   r = requests.post(
@@ -122,15 +203,18 @@ jobs:
                   raw = data.get("data", {}).get("data", {}).get("link")
                   name = data.get("data", {}).get("data", {}).get("file_name")
 
-                  if raw:
-                      return raw, name
+                  if raw and is_valid_download_url(raw):
+                      return raw, clean_filename(name)
+
               except:
                   pass
 
               return None, None
 
           def try_tgsave(link):
+
               try:
+
                   r = requests.post(
                       "https://api.tgsave.com/download",
                       headers={
@@ -155,8 +239,8 @@ jobs:
                       or data.get("name")
                   )
 
-                  if raw:
-                      return raw, name
+                  if raw and is_valid_download_url(raw):
+                      return raw, clean_filename(name)
 
               except:
                   pass
@@ -164,7 +248,9 @@ jobs:
               return None, None
 
           def try_html_scrape(link):
+
               try:
+
                   r = requests.get(
                       link,
                       headers=HEADERS,
@@ -173,34 +259,69 @@ jobs:
 
                   html = r.text
 
+                  # =================================================
+                  # DIRECT FILE PATTERNS
+                  # =================================================
+
                   patterns = [
+
                       r'https://cdn[0-9]*\.telesco\.pe/file/[^\s"\']+',
-                      r'https://[^"\']+\.(mp4|mkv|mov|pdf|zip|rar|7z|mp3|jpg|png)[^"\']*'
+
+                      r'https://[^"\']+\.(mp4|mkv|mov|avi|zip|rar|7z|pdf|mp3|wav|flac|jpg|jpeg|png|webp|epub|txt|docx?|xlsx?|pptx?)[^"\']*'
                   ]
 
-                  for p in patterns:
-                      m = re.search(p, html)
+                  for pattern in patterns:
 
-                      if m:
-                          url = m.group(0)
+                      matches = re.findall(pattern, html)
 
-                          name = url.split("/")[-1].split("?")[0]
+                      if matches:
 
-                          return url, name
+                          # re.findall with groups may return tuples
+                          if isinstance(matches[0], tuple):
+                              continue
+
+                          for url in matches:
+
+                              if is_valid_download_url(url):
+
+                                  filename = clean_filename(
+                                      url.split("/")[-1]
+                                  )
+
+                                  return url, filename
+
+                  # =================================================
+                  # META TAGS
+                  # =================================================
 
                   soup = BeautifulSoup(html, "lxml")
 
-                  meta_video = soup.find("meta", property="og:video")
-                  if meta_video:
-                      url = meta_video.get("content")
-                      if url:
-                          return url, url.split("/")[-1]
+                  meta_tags = [
 
-                  meta_image = soup.find("meta", property="og:image")
-                  if meta_image:
-                      url = meta_image.get("content")
-                      if url:
-                          return url, url.split("/")[-1]
+                      soup.find("meta", property="og:video"),
+                      soup.find("meta", property="twitter:player"),
+                      soup.find("meta", property="og:audio"),
+
+                  ]
+
+                  for tag in meta_tags:
+
+                      if not tag:
+                          continue
+
+                      url = tag.get("content")
+
+                      if not url:
+                          continue
+
+                      if not is_valid_download_url(url):
+                          continue
+
+                      filename = clean_filename(
+                          url.split("/")[-1]
+                      )
+
+                      return url, filename
 
               except:
                   pass
@@ -208,7 +329,9 @@ jobs:
               return None, None
 
           def try_ytdlp_resolve(link):
+
               try:
+
                   result = subprocess.run(
                       [
                           "yt-dlp",
@@ -221,20 +344,31 @@ jobs:
                   )
 
                   if result.returncode == 0:
-                      url = result.stdout.strip()
 
-                      if url.startswith("http"):
-                          return url, None
+                      urls = result.stdout.strip().splitlines()
+
+                      for url in urls:
+
+                          if is_valid_download_url(url):
+                              return url, None
 
               except:
                   pass
 
               return None, None
 
+          # =====================================================
+          # RESOLVER PIPELINE
+          # =====================================================
+
           resolvers = [
+
               ("telegramdownloader", try_telegramdownloader),
+
               ("tgsave", try_tgsave),
+
               ("html_scrape", try_html_scrape),
+
               ("yt-dlp", try_ytdlp_resolve),
           ]
 
@@ -254,10 +388,21 @@ jobs:
 
                   if raw_url:
 
+                      if not is_valid_download_url(raw_url):
+
+                          print("⚠️ Invalid URL filtered")
+                          continue
+
                       print(f"✅ Success via {resolver_name}")
 
                       if not file_name:
-                          file_name = raw_url.split("/")[-1].split("?")[0]
+
+                          file_name = clean_filename(
+                              raw_url.split("/")[-1]
+                          )
+
+                      if not file_name:
+                          file_name = "downloaded_file"
 
                       resolved.append({
                           "telegram_link": link,
@@ -275,6 +420,26 @@ jobs:
               if not success:
                   failed.append(link)
 
+          # =====================================================
+          # REMOVE DUPLICATES
+          # =====================================================
+
+          unique_resolved = []
+          seen_urls = set()
+
+          for item in resolved:
+
+              if item["download_url"] not in seen_urls:
+
+                  seen_urls.add(item["download_url"])
+                  unique_resolved.append(item)
+
+          resolved = unique_resolved
+
+          # =====================================================
+          # SAVE
+          # =====================================================
+
           with open("/tmp/resolved.json", "w") as f:
               json.dump(resolved, f)
 
@@ -289,8 +454,10 @@ jobs:
 
           if not resolved:
               raise Exception("No links resolved")
+
           PYEOF
 
+        
       - name: ⬇️ Download Files
         run: |
           python3 << 'PYEOF'

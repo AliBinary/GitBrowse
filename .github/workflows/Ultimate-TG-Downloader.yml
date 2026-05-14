@@ -109,7 +109,7 @@ jobs:
                   seen.add(link)
                   unique_links.append(link)
 
-          print(f"✅ Total unique links: {len(unique_links)}")
+          print(f"✅ Total unique links: {len(unique_links)}", flush=True)
 
           resolved = []
           failed = []
@@ -140,10 +140,10 @@ jobs:
 
                   client.start()
 
-                  print("✅ Telethon initialized")
+                  print("✅ Telethon initialized", flush=True)
 
               except Exception as e:
-                  print(f"⚠️ Telethon init failed: {e}")
+                  print(f"⚠️ Telethon init failed: {e}", flush=True)
 
           # ======================================
           # HELPERS
@@ -214,7 +214,7 @@ jobs:
                   }, file_name
 
               except Exception as e:
-                  print(f"⚠️ Telethon resolver error: {e}")
+                  print(f"⚠️ Telethon resolver error: {e}", flush=True)
 
               return None, None
 
@@ -423,21 +423,21 @@ jobs:
 
           for idx, link in enumerate(unique_links, 1):
 
-              print("\n" + "="*60)
-              print(f"[{idx}/{len(unique_links)}] {link}")
-              print("="*60)
+              print("\n" + "="*60, flush=True)
+              print(f"[{idx}/{len(unique_links)}] {link}", flush=True)
+              print("="*60, flush=True)
 
               success = False
 
               for resolver_name, resolver in resolvers:
 
-                  print(f"🔍 Trying resolver: {resolver_name}")
+                  print(f"🔍 Trying resolver: {resolver_name}", flush=True)
 
                   raw_url, file_name = resolver(link)
 
                   if raw_url:
 
-                      print(f"✅ Success via {resolver_name}")
+                      print(f"✅ Success via {resolver_name}", flush=True)
 
                       if isinstance(raw_url, dict):
 
@@ -464,7 +464,7 @@ jobs:
                       break
 
                   else:
-                      print(f"⚠️ Failed: {resolver_name}")
+                      print(f"⚠️ Failed: {resolver_name}", flush=True)
 
               if not success:
                   failed.append(link)
@@ -475,11 +475,11 @@ jobs:
           with open("/tmp/failed_links.json", "w") as f:
               json.dump(failed, f)
 
-          print("\n========================")
-          print("📊 RESOLVE SUMMARY")
-          print("========================")
-          print(f"✅ Resolved: {len(resolved)}")
-          print(f"❌ Failed: {len(failed)}")
+          print("\n========================", flush=True)
+          print("📊 RESOLVE SUMMARY", flush=True)
+          print("========================", flush=True)
+          print(f"✅ Resolved: {len(resolved)}", flush=True)
+          print(f"❌ Failed: {len(failed)}", flush=True)
 
           if not resolved:
               raise Exception("No links resolved")
@@ -537,10 +537,10 @@ jobs:
 
                   client.start()
 
-                  print("✅ Telethon download client initialized")
+                  print("✅ Telethon download client initialized", flush=True)
 
               except Exception as e:
-                  print(f"⚠️ Telethon download init failed: {e}")
+                  print(f"⚠️ Telethon download init failed: {e}", flush=True)
 
           # ======================================
           # HELPERS
@@ -579,8 +579,18 @@ jobs:
 
                           with open(path, "wb") as f:
 
+                              downloaded = 0
+                              
                               async for chunk in resp.content.iter_chunked(1024*1024):
+                              
                                   f.write(chunk)
+                              
+                                  downloaded += len(chunk)
+                              
+                                  print(
+                                      f"📥 aiohttp: {downloaded // (1024*1024)} MB",
+                                      flush=True
+                                  )
 
                   return os.path.exists(path)
 
@@ -602,10 +612,12 @@ jobs:
 
                   with open(path, "wb") as f:
 
-                      for chunk in r.iter_content(chunk_size=1024*1024):
-
-                          if chunk:
-                              f.write(chunk)
+                      downloaded += len(chunk)
+                      
+                      print(
+                          f"📥 requests: {downloaded // (1024*1024)} MB",
+                          flush=True
+                      )
 
                   return os.path.exists(path)
 
@@ -618,7 +630,7 @@ jobs:
 
                   subprocess.run(
                       cmd,
-                      timeout=7200,
+                      timeout=1800,
                       check=True
                   )
 
@@ -647,9 +659,9 @@ jobs:
 
               path = os.path.join(folder, filename)
 
-              print("\n" + "="*60)
-              print(f"⬇️ [{idx}/{len(items)}] {filename}")
-              print("="*60)
+              print("\n" + "="*60, flush=True)
+              print(f"⬇️ [{idx}/{len(items)}] {filename}", flush=True)
+              print("="*60, flush=True)
 
               success = False
 
@@ -663,7 +675,7 @@ jobs:
 
                       if client:
 
-                          print("🔄 Trying: telethon_direct")
+                          print("🔄 Trying: telethon_direct", flush=True)
 
                           entity = item["entity"]
 
@@ -676,14 +688,30 @@ jobs:
 
                           if msg:
 
-                              msg.download_media(file=path)
+                              def progress_callback(current, total):
+                              
+                                  if total > 0:
+                              
+                                      percent = (current / total) * 100
+                              
+                                      print(
+                                          f"📥 Downloaded: {percent:.1f}% "
+                                          f"({current // (1024*1024)} MB / "
+                                          f"{total // (1024*1024)} MB)",
+                                          flush=True
+                                      )
+                              
+                              msg.download_media(
+                                  file=path,
+                                  progress_callback=progress_callback
+                              )
 
                               if os.path.exists(path):
 
                                   size_mb = os.path.getsize(path) / (1024*1024)
 
-                                  print("✅ Success via telethon_direct")
-                                  print(f"📦 Size: {size_mb:.2f} MB")
+                                  print("✅ Success via telethon_direct", flush=True)
+                                  print(f"📦 Size: {size_mb:.2f} MB", flush=True)
 
                                   downloaded.append({
                                       "filename": filename,
@@ -697,7 +725,7 @@ jobs:
 
                   except Exception as e:
 
-                      print(f"⚠️ Telethon direct failed: {e}")
+                      print(f"⚠️ Telethon direct failed: {e}", flush=True)
 
               if success:
                   continue
@@ -723,6 +751,7 @@ jobs:
                       run_cmd([
                           "curl",
                           "-L",
+                          "--progress-bar",
                           "--fail",
                           "-o",
                           path,
@@ -735,6 +764,7 @@ jobs:
                       lambda:
                       run_cmd([
                           "wget",
+                          "--progress=bar:force",
                           "-O",
                           path,
                           url
@@ -746,6 +776,8 @@ jobs:
                       lambda:
                       run_cmd([
                           "aria2c",
+                          "--summary-interval=5",
+                          "--console-log-level=notice",
                           "--dir",
                           folder,
                           "--out",
@@ -759,6 +791,7 @@ jobs:
                       lambda:
                       run_cmd([
                           "yt-dlp",
+                          "--newline",
                           "-o",
                           path,
                           url
@@ -780,7 +813,7 @@ jobs:
 
               for method_name, method in methods:
 
-                  print(f"🔄 Trying: {method_name}")
+                  print(f"🔄 Trying: {method_name}", flush=True)
 
                   try:
 
@@ -795,8 +828,8 @@ jobs:
 
                               size_mb = os.path.getsize(path) / (1024*1024)
 
-                              print(f"✅ Success via {method_name}")
-                              print(f"📦 Size: {size_mb:.2f} MB")
+                              print(f"✅ Success via {method_name}", flush=True)
+                              print(f"📦 Size: {size_mb:.2f} MB", flush=True)
 
                               downloaded.append({
                                   "filename": filename,
@@ -809,11 +842,11 @@ jobs:
                               success = True
                               break
 
-                      print(f"⚠️ Failed via {method_name}")
+                      print(f"⚠️ Failed via {method_name}", flush=True)
 
                   except Exception as e:
 
-                      print(f"⚠️ Error: {e}")
+                      print(f"⚠️ Error: {e}", flush=True)
 
               if not success:
 
@@ -828,11 +861,11 @@ jobs:
           with open("/tmp/failed_downloads.json", "w") as f:
               json.dump(failed, f)
 
-          print("\n========================")
-          print("📊 DOWNLOAD SUMMARY")
-          print("========================")
-          print(f"✅ Downloaded: {len(downloaded)}")
-          print(f"❌ Failed: {len(failed)}")
+          print("\n========================", flush=True)
+          print("📊 DOWNLOAD SUMMARY", flush=True)
+          print("========================", flush=True)
+          print(f"✅ Downloaded: {len(downloaded)}", flush=True)
+          print(f"❌ Failed: {len(failed)}", flush=True)
 
           if not downloaded:
               raise Exception("No successful downloads")
@@ -864,7 +897,7 @@ jobs:
 
           if [ -f "/tmp/downloaded.json" ]; then
 
-            COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/downloaded.json'))))")
+            COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/downloaded.json'))))", flush=True)
 
             echo "✅ Downloaded: $COUNT"
 
@@ -872,7 +905,7 @@ jobs:
 
           if [ -f "/tmp/failed_downloads.json" ]; then
 
-            FAIL=$(python3 -c "import json; print(len(json.load(open('/tmp/failed_downloads.json'))))")
+            FAIL=$(python3 -c "import json; print(len(json.load(open('/tmp/failed_downloads.json'))))", flush=True)
 
             echo "❌ Failed: $FAIL"
 

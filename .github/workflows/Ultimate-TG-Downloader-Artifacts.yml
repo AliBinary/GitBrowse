@@ -1,10 +1,10 @@
 # ================================
 # Ultimate Telegram Downloader
 # Telethon + Multi Resolver + Multi Downloader
-# GitHub Artifacts Edition
+# GitHub Actions Edition
 # ================================
 
-name: 📲 Ultimate Telegram Downloader (Artifacts)
+name: 📲 Ultimate Telegram Downloader
 
 on:
   workflow_dispatch:

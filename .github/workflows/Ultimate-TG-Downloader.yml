@@ -1,7 +1,6 @@
 # ================================
 # Ultimate Telegram Downloader
 # Telethon + Multi Resolver + Multi Downloader
-# Separate Artifact Per File
 # GitHub Actions Edition
 # ================================
 
@@ -225,8 +224,6 @@ jobs:
 
                   if not msg.media:
                       return None, None
-
-                  file_name = None
 
                   if msg.file and msg.file.name:
                       file_name = msg.file.name
@@ -483,7 +480,6 @@ jobs:
                           })
 
                       success = True
-
                       break
 
                   else:
@@ -528,11 +524,8 @@ jobs:
           import os
           import re
           import json
-          import asyncio
-          import aiohttp
-          import hashlib
+          import time
           import subprocess
-          import requests
 
           from telethon.sync import TelegramClient
           from telethon.sessions import StringSession
@@ -550,21 +543,15 @@ jobs:
 
           if api_id and api_hash and session:
 
-              try:
+              client = TelegramClient(
+                  StringSession(session),
+                  int(api_id),
+                  api_hash
+              )
 
-                  client = TelegramClient(
-                      StringSession(session),
-                      int(api_id),
-                      api_hash
-                  )
+              client.start()
 
-                  client.start()
-
-                  print("✅ Telethon initialized", flush=True)
-
-              except Exception as e:
-
-                  print(f"⚠️ Telethon init failed: {e}", flush=True)
+              print("✅ Telethon initialized", flush=True)
 
           def sanitize(name):
 
@@ -612,157 +599,74 @@ jobs:
 
                   try:
 
-                      if client:
+                      entity = item["entity"]
 
-                          print("🔄 Trying: telethon_direct", flush=True)
+                      msg_id = item["message_id"]
 
-                          entity = item["entity"]
-
-                          msg_id = item["message_id"]
-
-                          msg = client.get_messages(
-                              entity,
-                              ids=msg_id
-                          )
-
-                          if msg:
-
-                              def progress_callback(current, total):
-
-                                  if total > 0:
-
-                                      percent = (current / total) * 100
-
-                                      print(
-                                          f"📥 {percent:.1f}% "
-                                          f"({current // (1024*1024)} MB / "
-                                          f"{total // (1024*1024)} MB)",
-                                          flush=True
-                                      )
-
-                              msg.download_media(
-                                  file=path,
-                                  progress_callback=progress_callback
-                              )
-
-                              if os.path.exists(path):
-
-                                  size_mb = os.path.getsize(path) / (1024*1024)
-
-                                  print("✅ Success", flush=True)
-                                  print(f"📦 Size: {size_mb:.2f} MB", flush=True)
-
-                                  downloaded.append(path)
-
-                                  success = True
-
-                  except Exception as e:
-
-                      print(f"⚠️ Telethon failed: {e}", flush=True)
-
-              if success:
-                  continue
-
-              # ==================================
-              # URL DOWNLOAD
-              # ==================================
-
-              url = item.get("download_url")
-
-              if not url:
-
-                  failed.append(filename)
-
-                  continue
-
-              methods = [
-
-                  (
-                      "curl",
-                      [
-                          "curl",
-                          "-L",
-                          "--progress-bar",
-                          "--fail",
-                          "-o",
-                          path,
-                          url
-                      ]
-                  ),
-
-                  (
-                      "wget",
-                      [
-                          "wget",
-                          "--progress=bar:force",
-                          "-O",
-                          path,
-                          url
-                      ]
-                  ),
-
-                  (
-                      "aria2c",
-                      [
-                          "aria2c",
-                          "--summary-interval=5",
-                          "--console-log-level=notice",
-                          "--dir",
-                          folder,
-                          "--out",
-                          filename,
-                          url
-                      ]
-                  ),
-
-                  (
-                      "yt-dlp",
-                      [
-                          "yt-dlp",
-                          "--newline",
-                          "-o",
-                          path,
-                          url
-                      ]
-                  ),
-              ]
-
-              for method_name, cmd in methods:
-
-                  print(f"🔄 Trying: {method_name}", flush=True)
-
-                  try:
-
-                      if os.path.exists(path):
-                          os.remove(path)
-
-                      subprocess.run(
-                          cmd,
-                          timeout=7200,
-                          check=True
+                      msg = client.get_messages(
+                          entity,
+                          ids=msg_id
                       )
 
-                      if os.path.exists(path):
+                      if msg:
 
-                          if os.path.getsize(path) > 1024:
+                          last_update = [0]
+                          last_time = [time.time()]
+
+                          def progress_callback(current, total):
+
+                              now = time.time()
+
+                              if now - last_time[0] < 2:
+                                  return
+
+                              diff = current - last_update[0]
+                              elapsed = now - last_time[0]
+
+                              speed = diff / elapsed / (1024 * 1024)
+
+                              percent = (current / total) * 100
+
+                              remaining = (
+                                  (total - current) /
+                                  (diff / elapsed)
+                              ) if diff > 0 else 0
+
+                              mins = int(remaining // 60)
+                              secs = int(remaining % 60)
+
+                              print(
+                                  f"📥 {percent:.1f}% | "
+                                  f"{current // (1024*1024)} / "
+                                  f"{total // (1024*1024)} MB | "
+                                  f"⚡ {speed:.2f} MB/s | "
+                                  f"⏳ {mins}m {secs}s remaining",
+                                  flush=True
+                              )
+
+                              last_update[0] = current
+                              last_time[0] = now
+
+                          msg.download_media(
+                              file=path,
+                              progress_callback=progress_callback
+                          )
+
+                          if os.path.exists(path):
 
                               size_mb = os.path.getsize(path) / (1024*1024)
 
-                              print(f"✅ Success via {method_name}", flush=True)
-                              print(f"📦 Size: {size_mb:.2f} MB", flush=True)
+                              print(f"✅ Download completed ({size_mb:.2f} MB)", flush=True)
 
                               downloaded.append(path)
 
                               success = True
 
-                              break
-
                   except Exception as e:
 
-                      print(f"⚠️ {method_name} failed: {e}", flush=True)
+                      print(f"⚠️ Telethon failed: {e}", flush=True)
 
               if not success:
-
                   failed.append(filename)
 
           with open("/tmp/downloaded.json", "w") as f:
@@ -783,31 +687,16 @@ jobs:
           PYEOF
 
       # ==========================================
-      # UPLOAD EACH FILE SEPARATELY
+      # UPLOAD ARTIFACTS
       # ==========================================
-
-      - name: 📦 Upload files separately
-
-        run: |
-
-          cd downloads
-
-          find . -type f | while read file; do
-
-            safe_name=$(echo "$file" | sed 's|^\./||' | tr '/' '_' | tr ' ' '_')
-
-            echo "artifact_name=$safe_name" >> $GITHUB_ENV
-            echo "artifact_path=downloads/${file#./}" >> $GITHUB_ENV
-
-          done
 
       - name: 📤 Upload Artifacts
 
         uses: actions/upload-artifact@v4
 
         with:
-          name: telegram-download-${{ github.run_id }}
-          path: downloads/
+          name: telegram-downloads
+          path: downloads/**/*
           retention-days: 7
           compression-level: 0
 
@@ -843,7 +732,7 @@ jobs:
           fi
 
           echo ""
-          echo "📦 Uploaded as separate artifacts"
+          echo "📦 Files uploaded separately in artifact browser"
           echo ""
 
           find downloads -type f -exec ls -lh {} \;

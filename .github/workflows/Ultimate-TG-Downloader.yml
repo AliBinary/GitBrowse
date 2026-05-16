@@ -783,33 +783,28 @@ jobs:
           PYEOF
 
       # ==========================================
-      # UPLOAD EACH FILE SEPARATELY
+      # CREATE GITHUB RELEASE
       # ==========================================
-
-      - name: 📦 Upload files separately
-
-        run: |
-
-          cd downloads
-
-          find . -type f | while read file; do
-
-            safe_name=$(echo "$file" | sed 's|^\./||' | tr '/' '_' | tr ' ' '_')
-
-            echo "artifact_name=$safe_name" >> $GITHUB_ENV
-            echo "artifact_path=downloads/${file#./}" >> $GITHUB_ENV
-
-          done
-
-      - name: 📤 Upload Artifacts
-
-        uses: actions/upload-artifact@v4
-
+      - name: 🏷️ Create Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: telegram-download-${{ github.run_id }}
-          path: downloads/
-          retention-days: 7
-          compression-level: 0
+          tag_name: telegram-${{ github.run_id }}
+          name: Telegram Download ${{ github.run_id }}
+          draft: false
+          prerelease: false
+      
+      # ==========================================
+      # UPLOAD EACH FILE AS RELEASE ASSET (NOT ARTIFACT)
+      # ==========================================
+      - name: 📤 Upload files to Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: telegram-${{ github.run_id }}
+          files: downloads/**/*
 
       # ==========================================
       # FINAL REPORT

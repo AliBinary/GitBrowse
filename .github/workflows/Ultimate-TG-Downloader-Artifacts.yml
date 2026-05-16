@@ -4,7 +4,7 @@
 # GitHub Actions Edition
 # ================================
 
-name: 📲 Ultimate Telegram Downloader
+name: 📲 Ultimate Telegram Downloader (Artifacts)
 
 on:
   workflow_dispatch:

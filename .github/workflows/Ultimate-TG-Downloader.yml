@@ -1,42 +1,95 @@
-name: 📲 Ultimate Telegram Downloader (Release Edition)
+# ================================
+# Ultimate Telegram Downloader
+# Telethon + Multi Resolver + Multi Downloader
+# Separate Artifact Per File
+# GitHub Actions Edition
+# ================================
+
+name: 📲 Ultimate Telegram Downloader
 
 on:
   workflow_dispatch:
     inputs:
       telegram_links:
-        description: "Telegram links"
+        description: '🔗 Telegram links (comma / space / newline separated)'
         required: true
         type: string
 
+      password:
+        description: '🔐 Optional archive password'
+        required: false
+        default: ''
+        type: string
+
 jobs:
+
   download:
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 360
 
     permissions:
-      contents: write
+      contents: read
 
     steps:
+
+      # ==========================================
+      # CHECKOUT
+      # ==========================================
 
       - name: 📂 Checkout
         uses: actions/checkout@v4
 
+      # ==========================================
+      # INSTALL DEPENDENCIES
+      # ==========================================
+
       - name: ⚙️ Install dependencies
         run: |
+
           sudo apt-get update -qq
-          sudo apt-get install -y curl wget aria2 ffmpeg p7zip-full unzip zip python3 python3-pip
+
+          sudo apt-get install -y \
+            curl \
+            wget \
+            jq \
+            aria2 \
+            p7zip-full \
+            unzip \
+            zip \
+            ffmpeg \
+            python3 \
+            python3-pip
+
           pip3 install --upgrade pip
-          pip3 install requests aiohttp yt-dlp beautifulsoup4 lxml telethon
+
+          pip3 install \
+            requests \
+            aiohttp \
+            yt-dlp \
+            beautifulsoup4 \
+            lxml \
+            telethon
+
+          echo "✅ Dependencies installed"
+
+      # ==========================================
+      # PREPARE WORKSPACE
+      # ==========================================
 
       - name: 📁 Prepare workspace
         run: |
+
           mkdir -p downloads
           mkdir -p temp
 
-      # =====================================================
-      # RESOLVE STEP (MULTI-RESOLVER + TELETHON)
-      # =====================================================
+      # ==========================================
+      # RESOLVE TELEGRAM LINKS
+      # ==========================================
+
       - name: 📋 Resolve Telegram URLs
+
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
@@ -46,161 +99,423 @@ jobs:
 
           python3 << 'PYEOF'
 
-          import os, re, json, urllib.parse, subprocess, requests
+          import os
+          import re
+          import json
+          import urllib.parse
+          import subprocess
+          import requests
+
           from bs4 import BeautifulSoup
+
           from telethon.sync import TelegramClient
           from telethon.sessions import StringSession
 
           raw_input = """${{ github.event.inputs.telegram_links }}"""
 
-          links = [x.strip() for x in re.split(r'[\s,\n]+', raw_input) if x.startswith("http")]
+          links = re.split(r'[\s,\n]+', raw_input)
+
+          links = [
+              l.strip()
+              for l in links
+              if l.strip().startswith("http")
+          ]
 
           seen = set()
+
           unique_links = []
 
-          for l in links:
-              if l not in seen:
-                  seen.add(l)
-                  unique_links.append(l)
+          for link in links:
 
-          print("Total links:", len(unique_links), flush=True)
+              if link not in seen:
+
+                  seen.add(link)
+
+                  unique_links.append(link)
+
+          print(f"✅ Total unique links: {len(unique_links)}", flush=True)
 
           resolved = []
+
           failed = []
 
-          def invalid_url(url):
-              if not url:
-                  return True
-              return url.startswith(("blob:", "data:", "javascript:", "about:")) or not url.startswith("http")
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0"
+          }
 
-          # ================= TELETHON =================
+          # ======================================
+          # TELETHON INIT
+          # ======================================
 
           client = None
-          if os.getenv("TG_API_ID") and os.getenv("TG_SESSION"):
-              client = TelegramClient(
-                  StringSession(os.environ["TG_SESSION"]),
-                  int(os.environ["TG_API_ID"]),
-                  os.environ["TG_API_HASH"]
-              )
-              client.start()
 
-          def telethon_resolver(link):
+          api_id = os.environ.get("TG_API_ID")
+          api_hash = os.environ.get("TG_API_HASH")
+          session = os.environ.get("TG_SESSION")
+
+          if api_id and api_hash and session:
+
+              try:
+
+                  client = TelegramClient(
+                      StringSession(session),
+                      int(api_id),
+                      api_hash
+                  )
+
+                  client.start()
+
+                  print("✅ Telethon initialized", flush=True)
+
+              except Exception as e:
+
+                  print(f"⚠️ Telethon init failed: {e}", flush=True)
+
+          # ======================================
+          # HELPERS
+          # ======================================
+
+          def invalid_url(url):
+
+              if not url:
+                  return True
+
+              url = url.strip()
+
+              invalid_prefixes = [
+                  "data:image",
+                  "blob:",
+                  "javascript:",
+                  "about:"
+              ]
+
+              for p in invalid_prefixes:
+
+                  if url.startswith(p):
+                      return True
+
+              return not url.startswith("http")
+
+          # ======================================
+          # TELETHON RESOLVER
+          # ======================================
+
+          def try_telethon(link):
+
               if not client:
                   return None, None
+
               try:
+
                   parts = link.rstrip("/").split("/")
+
+                  if len(parts) < 2:
+                      return None, None
+
                   msg_id = int(parts[-1])
+
                   channel = parts[-2]
 
                   entity = client.get_entity(channel)
+
                   msg = client.get_messages(entity, ids=msg_id)
 
-                  if not msg or not msg.media:
+                  if not msg:
                       return None, None
 
-                  name = msg.file.name if msg.file and msg.file.name else f"{msg_id}.bin"
+                  if not msg.media:
+                      return None, None
+
+                  file_name = None
+
+                  if msg.file and msg.file.name:
+                      file_name = msg.file.name
+                  else:
+                      file_name = f"{msg_id}.bin"
 
                   return {
                       "mode": "telethon",
                       "entity": channel,
                       "message_id": msg_id,
-                      "file_name": name
-                  }, name
+                      "file_name": file_name
+                  }, file_name
 
-              except:
-                  return None, None
+              except Exception as e:
 
-          def tgsave(link):
-              try:
-                  r = requests.post("https://api.tgsave.com/download", json={"url": link}, timeout=30)
-                  d = r.json()
-                  url = d.get("url") or d.get("download_url")
-                  name = d.get("filename")
-                  if invalid_url(url):
-                      return None, None
-                  return url, name
-              except:
-                  return None, None
+                  print(f"⚠️ Telethon resolver error: {e}", flush=True)
 
-          def telegramdownloader(link):
-              try:
-                  r = requests.post(
-                      "https://telegramdownloader.net/proxy.php",
-                      data={"telegram_link": urllib.parse.quote(link)},
-                      timeout=30
-                  )
-                  d = r.json()
-                  url = d.get("data", {}).get("data", {}).get("link")
-                  name = d.get("data", {}).get("data", {}).get("file_name")
-                  if invalid_url(url):
-                      return None, None
-                  return url, name
-              except:
-                  return None, None
-
-          def html_scrape(link):
-              try:
-                  r = requests.get(link, timeout=20)
-                  urls = re.findall(r'https://[^"\']+\.(mp4|mkv|zip|rar|pdf|jpg|png)', r.text)
-                  for u in urls:
-                      if not invalid_url(u):
-                          return u, u.split("/")[-1]
-              except:
-                  pass
               return None, None
 
-          def ytdlp(link):
+          # ======================================
+          # TELEGRAMDOWNLOADER
+          # ======================================
+
+          def try_telegramdownloader(link):
+
               try:
-                  r = subprocess.run(["yt-dlp", "--get-url", link], capture_output=True, text=True)
-                  for u in r.stdout.splitlines():
-                      if u.startswith("http"):
-                          return u, None
+
+                  encoded = urllib.parse.quote(link)
+
+                  r = requests.post(
+                      "https://telegramdownloader.net/proxy.php",
+                      headers={
+                          **HEADERS,
+                          "Content-Type": "application/x-www-form-urlencoded"
+                      },
+                      data=f"telegram_link={encoded}",
+                      timeout=30
+                  )
+
+                  data = r.json()
+
+                  raw = data.get("data", {}).get("data", {}).get("link")
+
+                  name = data.get("data", {}).get("data", {}).get("file_name")
+
+                  if invalid_url(raw):
+                      return None, None
+
+                  return raw, name
+
               except:
                   pass
+
+              return None, None
+
+          # ======================================
+          # TGSAVE
+          # ======================================
+
+          def try_tgsave(link):
+
+              try:
+
+                  r = requests.post(
+                      "https://api.tgsave.com/download",
+                      headers={
+                          **HEADERS,
+                          "Content-Type": "application/json"
+                      },
+                      json={"url": link},
+                      timeout=30
+                  )
+
+                  data = r.json()
+
+                  raw = (
+                      data.get("url")
+                      or data.get("link")
+                      or data.get("download_url")
+                  )
+
+                  name = (
+                      data.get("filename")
+                      or data.get("file_name")
+                      or data.get("name")
+                  )
+
+                  if invalid_url(raw):
+                      return None, None
+
+                  return raw, name
+
+              except:
+                  pass
+
+              return None, None
+
+          # ======================================
+          # HTML SCRAPER
+          # ======================================
+
+          def try_html_scrape(link):
+
+              try:
+
+                  r = requests.get(
+                      link,
+                      headers=HEADERS,
+                      timeout=30
+                  )
+
+                  html = r.text
+
+                  patterns = [
+
+                      r'https://cdn[0-9]*\.telesco\.pe/file/[^\s"\']+',
+
+                      r'https://[^"\']+\.(mp4|mkv|mov|pdf|zip|rar|7z|mp3|jpg|jpeg|png|webp)[^"\']*'
+                  ]
+
+                  for p in patterns:
+
+                      matches = re.findall(p, html)
+
+                      if matches:
+
+                          if isinstance(matches[0], tuple):
+                              continue
+
+                          for url in matches:
+
+                              if invalid_url(url):
+                                  continue
+
+                              name = url.split("/")[-1].split("?")[0]
+
+                              return url, name
+
+                  soup = BeautifulSoup(html, "lxml")
+
+                  metas = [
+
+                      soup.find("meta", property="og:video"),
+
+                      soup.find("meta", property="og:image"),
+
+                      soup.find("meta", attrs={"name": "twitter:image"}),
+                  ]
+
+                  for meta in metas:
+
+                      if not meta:
+                          continue
+
+                      url = meta.get("content")
+
+                      if invalid_url(url):
+                          continue
+
+                      return url, url.split("/")[-1]
+
+              except:
+                  pass
+
+              return None, None
+
+          # ======================================
+          # YT-DLP RESOLVER
+          # ======================================
+
+          def try_ytdlp_resolve(link):
+
+              try:
+
+                  result = subprocess.run(
+                      [
+                          "yt-dlp",
+                          "--get-url",
+                          link
+                      ],
+                      capture_output=True,
+                      text=True,
+                      timeout=60
+                  )
+
+                  if result.returncode == 0:
+
+                      lines = result.stdout.strip().splitlines()
+
+                      for url in lines:
+
+                          url = url.strip()
+
+                          if invalid_url(url):
+                              continue
+
+                          return url, None
+
+              except:
+                  pass
+
               return None, None
 
           resolvers = [
-              ("telethon", telethon_resolver),
-              ("tgsave", tgsave),
-              ("telegramdownloader", telegramdownloader),
-              ("html", html_scrape),
-              ("yt-dlp", ytdlp)
+
+              ("telethon", try_telethon),
+
+              ("telegramdownloader", try_telegramdownloader),
+
+              ("tgsave", try_tgsave),
+
+              ("html_scrape", try_html_scrape),
+
+              ("yt-dlp", try_ytdlp_resolve),
           ]
 
-          for link in unique_links:
-              print("\nLINK:", link, flush=True)
+          for idx, link in enumerate(unique_links, 1):
 
-              ok = False
+              print("\n" + "="*60, flush=True)
+              print(f"[{idx}/{len(unique_links)}] {link}", flush=True)
+              print("="*60, flush=True)
 
-              for name, fn in resolvers:
-                  print("Trying:", name, flush=True)
-                  out, fname = fn(link)
+              success = False
 
-                  if out:
-                      resolved.append({
-                          "telegram_link": link,
-                          "download_url": out,
-                          "file_name": fname,
-                          "mode": "telethon" if isinstance(out, dict) else "url"
-                      })
-                      print("OK:", name, flush=True)
-                      ok = True
+              for resolver_name, resolver in resolvers:
+
+                  print(f"🔍 Trying resolver: {resolver_name}", flush=True)
+
+                  raw_url, file_name = resolver(link)
+
+                  if raw_url:
+
+                      print(f"✅ Success via {resolver_name}", flush=True)
+
+                      if isinstance(raw_url, dict):
+
+                          item = raw_url
+
+                          item["telegram_link"] = link
+                          item["resolver"] = resolver_name
+
+                          resolved.append(item)
+
+                      else:
+
+                          if not file_name:
+                              file_name = raw_url.split("/")[-1].split("?")[0]
+
+                          resolved.append({
+                              "telegram_link": link,
+                              "download_url": raw_url,
+                              "file_name": file_name,
+                              "resolver": resolver_name
+                          })
+
+                      success = True
+
                       break
 
-              if not ok:
+                  else:
+
+                      print(f"⚠️ Failed: {resolver_name}", flush=True)
+
+              if not success:
                   failed.append(link)
 
-          json.dump(resolved, open("/tmp/resolved.json", "w"))
-          json.dump(failed, open("/tmp/failed.json", "w"))
+          with open("/tmp/resolved.json", "w") as f:
+              json.dump(resolved, f)
 
-          print("Resolved:", len(resolved), flush=True)
+          with open("/tmp/failed_links.json", "w") as f:
+              json.dump(failed, f)
+
+          print("\n========================", flush=True)
+          print("📊 RESOLVE SUMMARY", flush=True)
+          print("========================", flush=True)
+          print(f"✅ Resolved: {len(resolved)}", flush=True)
+          print(f"❌ Failed: {len(failed)}", flush=True)
+
+          if not resolved:
+              raise Exception("No links resolved")
+
           PYEOF
 
-      # =====================================================
-      # DOWNLOAD STEP (FIXED PROGRESS SYSTEM)
-      # =====================================================
+      # ==========================================
+      # DOWNLOAD FILES
+      # ==========================================
 
       - name: ⬇️ Download Files
+
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
@@ -210,149 +525,325 @@ jobs:
 
           python3 << 'PYEOF'
 
-          import os, json, re, subprocess, time
+          import os
+          import re
+          import json
+          import asyncio
+          import aiohttp
+          import hashlib
+          import subprocess
+          import requests
+
           from telethon.sync import TelegramClient
           from telethon.sessions import StringSession
 
-          items = json.load(open("/tmp/resolved.json"))
+          with open("/tmp/resolved.json", "r") as f:
+              items = json.load(f)
 
           os.makedirs("downloads", exist_ok=True)
 
           client = None
-          if os.getenv("TG_API_ID") and os.getenv("TG_SESSION"):
-              client = TelegramClient(
-                  StringSession(os.environ["TG_SESSION"]),
-                  int(os.environ["TG_API_ID"]),
-                  os.environ["TG_API_HASH"]
-              )
-              client.start()
+
+          api_id = os.environ.get("TG_API_ID")
+          api_hash = os.environ.get("TG_API_HASH")
+          session = os.environ.get("TG_SESSION")
+
+          if api_id and api_hash and session:
+
+              try:
+
+                  client = TelegramClient(
+                      StringSession(session),
+                      int(api_id),
+                      api_hash
+                  )
+
+                  client.start()
+
+                  print("✅ Telethon initialized", flush=True)
+
+              except Exception as e:
+
+                  print(f"⚠️ Telethon init failed: {e}", flush=True)
 
           def sanitize(name):
-              return re.sub(r'[^a-zA-Z0-9._-]', '_', name or "file")[:180]
+
+              if not name:
+                  name = "unknown_file"
+
+              name = name.split("?")[0]
+
+              name = re.sub(
+                  r'[^a-zA-Z0-9._-]',
+                  '_',
+                  name
+              )
+
+              return name[:180]
 
           downloaded = []
 
-          for i, item in enumerate(items, 1):
+          failed = []
 
-              name = sanitize(item["file_name"])
-              path = os.path.join("downloads", name)
+          for idx, item in enumerate(items, 1):
 
-              print("\n", "="*50)
-              print(f"[{i}/{len(items)}] {name}")
+              filename = sanitize(item["file_name"])
+
+              folder = os.path.join(
+                  "downloads",
+                  os.path.splitext(filename)[0]
+              )
+
+              os.makedirs(folder, exist_ok=True)
+
+              path = os.path.join(folder, filename)
+
+              print("\n" + "="*60, flush=True)
+              print(f"⬇️ [{idx}/{len(items)}] {filename}", flush=True)
+              print("="*60, flush=True)
 
               success = False
 
-              # ================= TELETHON DOWNLOAD =================
+              # ==================================
+              # TELETHON DIRECT
+              # ==================================
+
               if item.get("mode") == "telethon":
 
-                  print("Telethon download...")
+                  try:
 
-                  msg = client.get_messages(item["entity"], ids=item["message_id"])
+                      if client:
 
-                  progress = {
-                      "last_time": time.time(),
-                      "last": 0
-                  }
+                          print("🔄 Trying: telethon_direct", flush=True)
 
-                  def cb(current, total):
+                          entity = item["entity"]
 
-                      now = time.time()
-                      delta_t = max(now - progress["last_time"], 0.1)
-                      delta_b = current - progress["last"]
+                          msg_id = item["message_id"]
 
-                      speed = (delta_b / 1024 / 1024) / delta_t if delta_t else 0
+                          msg = client.get_messages(
+                              entity,
+                              ids=msg_id
+                          )
 
-                      percent = (current / total * 100) if total else 0
+                          if msg:
 
-                      eta = 0
-                      if speed > 0 and total:
-                          eta = ((total - current) / 1024 / 1024) / speed
+                              def progress_callback(current, total):
 
-                      print(
-                          f"📥 {percent:.1f}% | "
-                          f"{current//1024//1024}MB | "
-                          f"⚡ {speed:.2f} MB/s | ETA {eta:.1f}s",
-                          flush=True
-                      )
+                                  if total > 0:
 
-                      progress["last_time"] = now
-                      progress["last"] = current
+                                      percent = (current / total) * 100
 
-                  msg.download_media(file=path, progress_callback=cb)
+                                      print(
+                                          f"📥 {percent:.1f}% "
+                                          f"({current // (1024*1024)} MB / "
+                                          f"{total // (1024*1024)} MB)",
+                                          flush=True
+                                      )
 
-                  if os.path.exists(path):
-                      print("OK telethon")
-                      downloaded.append(path)
-                      success = True
+                              msg.download_media(
+                                  file=path,
+                                  progress_callback=progress_callback
+                              )
+
+                              if os.path.exists(path):
+
+                                  size_mb = os.path.getsize(path) / (1024*1024)
+
+                                  print("✅ Success", flush=True)
+                                  print(f"📦 Size: {size_mb:.2f} MB", flush=True)
+
+                                  downloaded.append(path)
+
+                                  success = True
+
+                  except Exception as e:
+
+                      print(f"⚠️ Telethon failed: {e}", flush=True)
 
               if success:
                   continue
 
-              # ================= URL DOWNLOAD =================
+              # ==================================
+              # URL DOWNLOAD
+              # ==================================
+
               url = item.get("download_url")
 
+              if not url:
+
+                  failed.append(filename)
+
+                  continue
+
               methods = [
-                  ["aria2c", ["aria2c", "-x16", "-s16", "-k1M", "-o", name, "-d", "downloads", url]],
-                  ["curl", ["curl", "-L", "-o", path, url]],
-                  ["wget", ["wget", "-O", path, url]]
+
+                  (
+                      "curl",
+                      [
+                          "curl",
+                          "-L",
+                          "--progress-bar",
+                          "--fail",
+                          "-o",
+                          path,
+                          url
+                      ]
+                  ),
+
+                  (
+                      "wget",
+                      [
+                          "wget",
+                          "--progress=bar:force",
+                          "-O",
+                          path,
+                          url
+                      ]
+                  ),
+
+                  (
+                      "aria2c",
+                      [
+                          "aria2c",
+                          "--summary-interval=5",
+                          "--console-log-level=notice",
+                          "--dir",
+                          folder,
+                          "--out",
+                          filename,
+                          url
+                      ]
+                  ),
+
+                  (
+                      "yt-dlp",
+                      [
+                          "yt-dlp",
+                          "--newline",
+                          "-o",
+                          path,
+                          url
+                      ]
+                  ),
               ]
 
-              for m, cmd in methods:
+              for method_name, cmd in methods:
 
-                  print("Trying:", m)
+                  print(f"🔄 Trying: {method_name}", flush=True)
 
                   try:
-                      subprocess.run(cmd, check=True, timeout=7200)
 
                       if os.path.exists(path):
-                          print("OK", m)
-                          downloaded.append(path)
-                          success = True
-                          break
+                          os.remove(path)
+
+                      subprocess.run(
+                          cmd,
+                          timeout=7200,
+                          check=True
+                      )
+
+                      if os.path.exists(path):
+
+                          if os.path.getsize(path) > 1024:
+
+                              size_mb = os.path.getsize(path) / (1024*1024)
+
+                              print(f"✅ Success via {method_name}", flush=True)
+                              print(f"📦 Size: {size_mb:.2f} MB", flush=True)
+
+                              downloaded.append(path)
+
+                              success = True
+
+                              break
 
                   except Exception as e:
-                      print("Fail:", m, e)
+
+                      print(f"⚠️ {method_name} failed: {e}", flush=True)
 
               if not success:
-                  print("FAILED:", name)
 
-          json.dump(downloaded, open("/tmp/downloaded.json", "w"))
-          print("DONE:", len(downloaded))
+                  failed.append(filename)
+
+          with open("/tmp/downloaded.json", "w") as f:
+              json.dump(downloaded, f)
+
+          with open("/tmp/failed_downloads.json", "w") as f:
+              json.dump(failed, f)
+
+          print("\n========================", flush=True)
+          print("📊 DOWNLOAD SUMMARY", flush=True)
+          print("========================", flush=True)
+          print(f"✅ Downloaded: {len(downloaded)}", flush=True)
+          print(f"❌ Failed: {len(failed)}", flush=True)
+
+          if not downloaded:
+              raise Exception("No successful downloads")
+
           PYEOF
 
-      # =====================================================
-      # CREATE RELEASE
-      # =====================================================
+      # ==========================================
+      # UPLOAD EACH FILE SEPARATELY
+      # ==========================================
 
-      - name: 🏷️ Create Release
-        id: release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: run-${{ github.run_id }}
-          name: Telegram Downloads ${{ github.run_id }}
-
-      # =====================================================
-      # UPLOAD TO RELEASE
-      # =====================================================
-
-      - name: 📤 Upload to Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 📦 Upload files separately
 
         run: |
 
-          for file in $(find downloads -type f); do
-            echo "Uploading $file"
-            gh release upload run-${{ github.run_id }} "$file" --clobber
+          cd downloads
+
+          find . -type f | while read file; do
+
+            safe_name=$(echo "$file" | sed 's|^\./||' | tr '/' '_' | tr ' ' '_')
+
+            echo "artifact_name=$safe_name" >> $GITHUB_ENV
+            echo "artifact_path=downloads/${file#./}" >> $GITHUB_ENV
+
           done
 
-      # =====================================================
-      # REPORT
-      # =====================================================
+      - name: 📤 Upload Artifacts
+
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: telegram-download-${{ github.run_id }}
+          path: downloads/
+          retention-days: 7
+          compression-level: 0
+
+      # ==========================================
+      # FINAL REPORT
+      # ==========================================
 
       - name: 📋 Final Report
+
         if: always()
+
         run: |
 
-          echo "DONE"
+          echo ""
+          echo "======================================="
+          echo "📲 Ultimate Telegram Downloader"
+          echo "======================================="
+
+          if [ -f "/tmp/downloaded.json" ]; then
+
+            COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/downloaded.json'))))")
+
+            echo "✅ Downloaded: $COUNT"
+
+          fi
+
+          if [ -f "/tmp/failed_downloads.json" ]; then
+
+            FAIL=$(python3 -c "import json; print(len(json.load(open('/tmp/failed_downloads.json'))))")
+
+            echo "❌ Failed: $FAIL"
+
+          fi
+
+          echo ""
+          echo "📦 Uploaded as separate artifacts"
+          echo ""
+
           find downloads -type f -exec ls -lh {} \;

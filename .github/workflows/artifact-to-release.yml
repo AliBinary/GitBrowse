@@ -1,4 +1,4 @@
-name: Artifact to Release
+name: ⭐ Artifact to Release
 
 on:
   workflow_dispatch:

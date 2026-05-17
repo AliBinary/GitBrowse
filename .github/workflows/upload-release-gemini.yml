@@ -1,0 +1,45 @@
+name: Upload Artifact to Release (gemini)
+
+on:
+  workflow_dispatch: # به شما اجازه می‌دهد ورک‌پلو را به صورت دستی اجرا کنید
+
+permissions:
+  contents: write # برای ایجاد ریلیس و آپلود فایل، این دسترسی الزامی است
+
+jobs:
+  deploy-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # ۱. دانلود آرتیفکت تولید شده
+    - name: Download Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: telegram-downloads # نام دقیق آرتیفکتی که در تصویر فرستادید
+        path: ./downloaded_artifact
+
+    # ۲. بررسی حجم و تقسیم فایل به پارت‌های ۱.۵ گیگابایتی (به دلیل محدودیت ۲ گیگابایتی گیت‌هاب)
+    - name: Split Large Files
+      run: |
+        mkdir -p split_assets
+        # فرض می‌کنیم فایل داخل آرتیفکت یک فایل فشرده یا بزرگ است
+        # با این دستور تمام فایل‌های داخل پوشه دانلود شده را تکه‌تکه می‌کنیم
+        cd downloaded_artifact
+        for file in *; do
+          if [ -f "$file" ]; then
+            split -b 1500M "$file" "../split_assets/${file}.part_"
+          fi
+        done
+
+    # ۳. ایجاد ریلیس و آپلود تمام پارت‌ها
+    - name: Create Release and Upload Assets
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v1.0.0-${{ github.run_id }} # ایجاد یک تگ یکتا بر اساس آیدی ران
+        name: "Release Telegram Downloads"
+        draft: false
+        prerelease: false
+        files: |
+          split_assets/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

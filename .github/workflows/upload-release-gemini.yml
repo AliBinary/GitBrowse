@@ -1,29 +1,34 @@
-name: Upload Artifact to Release (gemini)
+name: Deploy Past Artifact to Release (gemini)
 
 on:
-  workflow_dispatch: # به شما اجازه می‌دهد ورک‌پلو را به صورت دستی اجرا کنید
+  workflow_dispatch:
+    inputs:
+      past_run_id:
+        description: 'Enter the Run ID of the completed workflow'
+        required: true
+        type: string
 
 permissions:
-  contents: write # برای ایجاد ریلیس و آپلود فایل، این دسترسی الزامی است
+  contents: write # دسترسی لازم برای ساخت ریلیس
 
 jobs:
-  deploy-release:
+  upload-past-artifact:
     runs-on: ubuntu-latest
     
     steps:
-    # ۱. دانلود آرتیفکت تولید شده
-    - name: Download Artifact
+    # ۱. دانلود آرتیفکت از ران مشخص شده قبلی
+    - name: Download Artifact from Past Run
       uses: actions/download-artifact@v4
       with:
-        name: telegram-downloads # نام دقیق آرتیفکتی که در تصویر فرستادید
+        name: telegram-downloads # نام دقیق آرتیفکت شما
+        run-id: ${{ github.event.inputs.past_run_id }}
         path: ./downloaded_artifact
+        github-token: ${{ secrets.GITHUB_TOKEN }}
 
-    # ۲. بررسی حجم و تقسیم فایل به پارت‌های ۱.۵ گیگابایتی (به دلیل محدودیت ۲ گیگابایتی گیت‌هاب)
+    # ۲. تقسیم فایل‌ها به پارت‌های ۱.۵ گیگابایتی (به دلیل حجم ۱۱.۳ گیگابایتی)
     - name: Split Large Files
       run: |
         mkdir -p split_assets
-        # فرض می‌کنیم فایل داخل آرتیفکت یک فایل فشرده یا بزرگ است
-        # با این دستور تمام فایل‌های داخل پوشه دانلود شده را تکه‌تکه می‌کنیم
         cd downloaded_artifact
         for file in *; do
           if [ -f "$file" ]; then
@@ -31,12 +36,12 @@ jobs:
           fi
         done
 
-    # ۳. ایجاد ریلیس و آپلود تمام پارت‌ها
-    - name: Create Release and Upload Assets
+    # ۳. ساخت ریلیس و آپلود پارت‌ها
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v1.0.0-${{ github.run_id }} # ایجاد یک تگ یکتا بر اساس آیدی ران
-        name: "Release Telegram Downloads"
+        tag_name: release-${{ github.event.inputs.past_run_id }} # تگ بر اساس همان آیدی ران ساخته می‌شود
+        name: "Release for Run #${{ github.event.inputs.past_run_id }}"
         draft: false
         prerelease: false
         files: |

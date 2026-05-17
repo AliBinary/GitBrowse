@@ -1,4 +1,4 @@
-name: Move Artifact To Release (chatpgt)
+name: Move Artifact To Release With Progress (chatgpt)
 
 on:
   workflow_dispatch:
@@ -15,16 +15,17 @@ on:
 jobs:
   release-artifact:
     runs-on: ubuntu-latest
+
     permissions:
       actions: read
       contents: write
 
     steps:
 
-      - name: Checkout
+      - name: 📦 Checkout
         uses: actions/checkout@v4
 
-      - name: Download Artifact
+      - name: 📥 Download Artifact
         uses: dawidd6/action-download-artifact@v6
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -32,42 +33,82 @@ jobs:
           name: ${{ github.event.inputs.artifact_name }}
           path: artifact
 
-      - name: Show Downloaded Files
+      - name: 📊 Show Artifact Size
         run: |
-          echo "Downloaded files:"
+          echo "=============================="
+          echo "Artifact Download Completed"
+          echo "=============================="
           du -sh artifact || true
-          find artifact -type f | head -100
 
-      - name: Create Release Tag
+      - name: 🏷️ Generate Release Tag
         id: tag
         run: |
           TAG="artifact-${{ github.event.inputs.run_id }}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Compress Artifact
+      - name: 📦 Install pv
         run: |
-          cd artifact
-          zip -r ../artifact.zip .
+          sudo apt-get update
+          sudo apt-get install -y pv zip
 
-      - name: Split Large File
+      - name: 🗜️ Compress With Progress
         run: |
-          mkdir split
+          TOTAL_SIZE=$(du -sb artifact | awk '{print $1}')
 
-          FILE_SIZE=$(stat -c%s artifact.zip)
+          echo "=============================="
+          echo "Compressing files..."
+          echo "Total Size: $TOTAL_SIZE bytes"
+          echo "=============================="
+
+          tar cf - artifact \
+            | pv -s $TOTAL_SIZE \
+            | gzip > artifact.tar.gz
+
+          ls -lh artifact.tar.gz
+
+      - name: ✂️ Split Large Archive
+        run: |
+          mkdir -p split
+
+          FILE_SIZE=$(stat -c%s artifact.tar.gz)
           LIMIT=$((1900 * 1024 * 1024))
 
+          echo "=============================="
+          echo "Archive Size: $FILE_SIZE"
+          echo "Split Limit : $LIMIT"
+          echo "=============================="
+
           if [ "$FILE_SIZE" -gt "$LIMIT" ]; then
-            echo "Large file detected. Splitting..."
-            split -b 1900M artifact.zip split/artifact.zip.part_
+            echo "Splitting archive..."
+
+            split -b 1900M \
+              --numeric-suffixes=1 \
+              --suffix-length=3 \
+              artifact.tar.gz \
+              split/artifact.tar.gz.part_
+
           else
-            mv artifact.zip split/
+            mv artifact.tar.gz split/
           fi
 
-      - name: Create GitHub Release
+          echo "=============================="
+          echo "Generated Files:"
+          echo "=============================="
+
+          ls -lh split/
+
+      - name: 🚀 Upload To GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: Artifact Release ${{ github.event.inputs.run_id }}
           files: split/*
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ✅ Done
+        run: |
+          echo "=============================="
+          echo "Release Upload Completed"
+          echo "=============================="

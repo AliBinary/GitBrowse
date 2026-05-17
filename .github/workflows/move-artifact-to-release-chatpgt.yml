@@ -1,19 +1,19 @@
-name: Move Artifact To Release With Progress (chatgpt)
+name: Move Huge Artifact To Release (chatgpt)
 
 on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Workflow Run ID containing the artifact"
         required: true
+        description: "Workflow Run ID"
 
       artifact_name:
-        description: "Artifact name"
         required: true
         default: "telegram-downloads"
+        description: "Artifact Name"
 
 jobs:
-  release-artifact:
+  move:
     runs-on: ubuntu-latest
 
     permissions:
@@ -25,61 +25,97 @@ jobs:
       - name: 📦 Checkout
         uses: actions/checkout@v4
 
-      - name: 📥 Download Artifact
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          run_id: ${{ github.event.inputs.run_id }}
-          name: ${{ github.event.inputs.artifact_name }}
-          path: artifact
-
-      - name: 📊 Show Artifact Size
-        run: |
-          echo "=============================="
-          echo "Artifact Download Completed"
-          echo "=============================="
-          du -sh artifact || true
-
-      - name: 🏷️ Generate Release Tag
-        id: tag
-        run: |
-          TAG="artifact-${{ github.event.inputs.run_id }}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: 📦 Install pv
+      - name: 📥 Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y pv zip
+          sudo apt-get install -y jq pv unzip zip
 
-      - name: 🗜️ Compress With Progress
+      - name: 🔎 Get Artifact Info
+        id: artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TOTAL_SIZE=$(du -sb artifact | awk '{print $1}')
 
-          echo "=============================="
-          echo "Compressing files..."
-          echo "Total Size: $TOTAL_SIZE bytes"
-          echo "=============================="
+          API_URL="https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.inputs.run_id }}/artifacts"
+
+          echo "Fetching artifact metadata..."
+
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$API_URL")
+
+          echo "$RESPONSE" > artifacts.json
+
+          ARTIFACT_ID=$(jq -r \
+            '.artifacts[] | select(.name=="${{ github.event.inputs.artifact_name }}") | .id' \
+            artifacts.json)
+
+          if [ -z "$ARTIFACT_ID" ] || [ "$ARTIFACT_ID" = "null" ]; then
+            echo "Artifact not found!"
+            exit 1
+          fi
+
+          echo "artifact_id=$ARTIFACT_ID" >> $GITHUB_OUTPUT
+
+          echo "Artifact ID: $ARTIFACT_ID"
+
+      - name: 📥 Download Huge Artifact With Progress
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+
+          mkdir -p artifact
+
+          DOWNLOAD_URL="https://api.github.com/repos/${{ github.repository }}/actions/artifacts/${{ steps.artifact.outputs.artifact_id }}/zip"
+
+          echo "Starting huge artifact download..."
+
+          curl -L \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$DOWNLOAD_URL" \
+            | pv \
+            > artifact.zip
+
+          echo "Download completed."
+
+          ls -lh artifact.zip
+
+      - name: 📂 Extract
+        run: |
+          unzip -q artifact.zip -d artifact
+
+          echo "Extracted files:"
+          find artifact | head -100
+
+      - name: 🏷️ Generate Unique Tag
+        id: tag
+        run: |
+          TAG="artifact-${{ github.event.inputs.run_id }}-${{ github.run_number }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: 🗜️ Repack With Progress
+        run: |
+
+          TOTAL=$(du -sb artifact | awk '{print $1}')
 
           tar cf - artifact \
-            | pv -s $TOTAL_SIZE \
+            | pv -s $TOTAL \
             | gzip > artifact.tar.gz
 
           ls -lh artifact.tar.gz
 
-      - name: ✂️ Split Large Archive
+      - name: ✂️ Split Huge Files
         run: |
-          mkdir -p split
+
+          mkdir split
 
           FILE_SIZE=$(stat -c%s artifact.tar.gz)
           LIMIT=$((1900 * 1024 * 1024))
 
-          echo "=============================="
-          echo "Archive Size: $FILE_SIZE"
-          echo "Split Limit : $LIMIT"
-          echo "=============================="
-
           if [ "$FILE_SIZE" -gt "$LIMIT" ]; then
-            echo "Splitting archive..."
+
+            echo "Splitting huge archive..."
 
             split -b 1900M \
               --numeric-suffixes=1 \
@@ -91,24 +127,17 @@ jobs:
             mv artifact.tar.gz split/
           fi
 
-          echo "=============================="
-          echo "Generated Files:"
-          echo "=============================="
-
           ls -lh split/
 
-      - name: 🚀 Upload To GitHub Release
+      - name: 🚀 Upload To Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: Artifact Release ${{ github.event.inputs.run_id }}
+          name: Huge Artifact Release
           files: split/*
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: ✅ Done
         run: |
-          echo "=============================="
-          echo "Release Upload Completed"
-          echo "=============================="
+          echo "Release upload completed successfully."

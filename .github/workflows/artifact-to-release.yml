@@ -1,0 +1,53 @@
+name: Artifact to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run ID that produced the artifact"
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Download artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir artifact
+          gh run download ${{ github.event.inputs.run_id }} -n telegram-downloads -D artifact
+
+      - name: Archive artifact
+        run: |
+          tar -czf telegram-downloads.tar.gz -C artifact .
+
+      - name: Split into 2GB parts
+        run: |
+          split -b 2000M telegram-downloads.tar.gz telegram-downloads.part.
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: artifact-${{ github.run_number }}
+          name: Artifact Build ${{ github.run_number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload parts
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: artifact-${{ github.run_number }}
+          files: telegram-downloads.part.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,4 +1,4 @@
-name: Deploy Past Artifact to Release with Progress
+name: Deploy Past Artifact to Release with Progress (gemini)
 
 on:
   workflow_dispatch:

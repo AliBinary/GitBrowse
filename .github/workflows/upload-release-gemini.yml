@@ -1,4 +1,4 @@
-name: Deploy Past Artifact to Release with Progress (gemini)
+name: Deploy Past Artifact to Release with Progress
 
 on:
   workflow_dispatch:
@@ -6,6 +6,11 @@ on:
       past_run_id:
         description: 'Enter the Run ID of the completed workflow'
         required: true
+        type: string
+      artifact_name:
+        description: 'Enter the Name of the Artifact'
+        required: true
+        default: 'telegram-downloads'
         type: string
 
 permissions:
@@ -20,21 +25,21 @@ jobs:
     - name: Download Artifact with Progress
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        ART_NAME: ${{ github.event.inputs.artifact_name }}
       run: |
         echo "=== در حال دریافت اطلاعات آرتیفکت... ==="
-        # پیدا کردن لینک دانلود آرتیفکت از طریق API گیت‌هاب
+        # پیدا کردن لینک دانلود آرتیفکت از طریق API گیت‌هاب بر اساس نام ورودی
         DOWNLOAD_URL=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
           "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.inputs.past_run_id }}/artifacts" \
-          | jq -r '.artifacts[] | select(.name=="telegram-downloads") | .archive_download_url')
+          | jq --arg name "$ART_NAME" -r '.artifacts[] | select(.name==$name) | .archive_download_url')
         
         if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
-          echo "خطا: آرتیفکتی با نام telegram-downloads در این Run ID یافت نشد."
+          echo "خطا: آرتیفکتی با نام $ART_NAME در این Run ID یافت نشد."
           exit 1
         fi
         
         echo "=== در حال دانلود آرتیفکت (حجم بالا) ==="
         mkdir -p downloaded_artifact
-        # استفاده از curl همراه با نشان دادن درصد پیشرفت (-#) برای دانلود فایل zip
         curl -L -# -H "Authorization: Bearer $GH_TOKEN" -o downloaded_artifact/artifact.zip "$DOWNLOAD_URL"
         
         echo "=== در حال استخراج فایل zip... ==="
@@ -57,14 +62,14 @@ jobs:
     - name: Create Release and Upload Assets with Progress
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        ART_NAME: ${{ github.event.inputs.artifact_name }}
       run: |
         TAG_NAME="release-${{ github.event.inputs.past_run_id }}"
         
         echo "=== در حال ساخت Release جدید... ==="
-        # ساخت یک ریلیس خام از طریق API
         RELEASE_ID=$(curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" \
           -H "Content-Type: application/json" \
-          -d "{\"tag_name\":\"$TAG_NAME\",\"name\":\"Release for Run #$TAG_NAME\",\"draft\":false,\"prerelease\":false}" \
+          -d "{\"tag_name\":\"$TAG_NAME\",\"name\":\"Release for Run #$TAG_NAME ($ART_NAME)\",\"draft\":false,\"prerelease\":false}" \
           "https://api.github.com/repos/${{ github.repository }}/releases" \
           | jq -r '.id')
           
@@ -76,7 +81,6 @@ jobs:
           if [ -f "$asset" ]; then
             echo "--------------------------------------------------"
             echo "آپلود فایل: $asset"
-            # آپلود هرفایل با استفاده از curl و فلگ -# برای نمایش پیشرفت آپلود
             curl -# -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/octet-stream" \

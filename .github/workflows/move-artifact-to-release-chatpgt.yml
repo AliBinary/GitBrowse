@@ -1,0 +1,73 @@
+name: Move Artifact To Release (chatpgt)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Workflow Run ID containing the artifact"
+        required: true
+
+      artifact_name:
+        description: "Artifact name"
+        required: true
+        default: "telegram-downloads"
+
+jobs:
+  release-artifact:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          run_id: ${{ github.event.inputs.run_id }}
+          name: ${{ github.event.inputs.artifact_name }}
+          path: artifact
+
+      - name: Show Downloaded Files
+        run: |
+          echo "Downloaded files:"
+          du -sh artifact || true
+          find artifact -type f | head -100
+
+      - name: Create Release Tag
+        id: tag
+        run: |
+          TAG="artifact-${{ github.event.inputs.run_id }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Compress Artifact
+        run: |
+          cd artifact
+          zip -r ../artifact.zip .
+
+      - name: Split Large File
+        run: |
+          mkdir split
+
+          FILE_SIZE=$(stat -c%s artifact.zip)
+          LIMIT=$((1900 * 1024 * 1024))
+
+          if [ "$FILE_SIZE" -gt "$LIMIT" ]; then
+            echo "Large file detected. Splitting..."
+            split -b 1900M artifact.zip split/artifact.zip.part_
+          else
+            mv artifact.zip split/
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Artifact Release ${{ github.event.inputs.run_id }}
+          files: split/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

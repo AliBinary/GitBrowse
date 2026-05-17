@@ -1,4 +1,4 @@
-name: Deploy Past Artifact to Release (gemini)
+name: Deploy Past Artifact to Release with Progress (gemini)
 
 on:
   workflow_dispatch:
@@ -16,35 +16,72 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    # ۱. دانلود آرتیفکت از ران مشخص شده قبلی
-    - name: Download Artifact from Past Run
-      uses: actions/download-artifact@v4
-      with:
-        name: telegram-downloads # نام دقیق آرتیفکت شما
-        run-id: ${{ github.event.inputs.past_run_id }}
-        path: ./downloaded_artifact
-        github-token: ${{ secrets.GITHUB_TOKEN }}
+    # ۱. پیدا کردن و دانلود آرتیفکت با استفاده از curl برای نمایش درصد پیشرفت
+    - name: Download Artifact with Progress
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "=== در حال دریافت اطلاعات آرتیفکت... ==="
+        # پیدا کردن لینک دانلود آرتیفکت از طریق API گیت‌هاب
+        DOWNLOAD_URL=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.inputs.past_run_id }}/artifacts" \
+          | jq -r '.artifacts[] | select(.name=="telegram-downloads") | .archive_download_url')
+        
+        if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+          echo "خطا: آرتیفکتی با نام telegram-downloads در این Run ID یافت نشد."
+          exit 1
+        fi
+        
+        echo "=== در حال دانلود آرتیفکت (حجم بالا) ==="
+        mkdir -p downloaded_artifact
+        # استفاده از curl همراه با نشان دادن درصد پیشرفت (-#) برای دانلود فایل zip
+        curl -L -# -H "Authorization: Bearer $GH_TOKEN" -o downloaded_artifact/artifact.zip "$DOWNLOAD_URL"
+        
+        echo "=== در حال استخراج فایل zip... ==="
+        cd downloaded_artifact
+        unzip artifact.zip && rm artifact.zip
 
-    # ۲. تقسیم فایل‌ها به پارت‌های ۱.۵ گیگابایتی (به دلیل حجم ۱۱.۳ گیگابایتی)
+    # ۲. تقسیم فایل‌ها به پارت‌های ۱.۵ گیگابایتی
     - name: Split Large Files
       run: |
         mkdir -p split_assets
         cd downloaded_artifact
         for file in *; do
           if [ -f "$file" ]; then
+            echo "در حال تقسیم فایل: $file"
             split -b 1500M "$file" "../split_assets/${file}.part_"
           fi
         done
 
-    # ۳. ساخت ریلیس و آپلود پارت‌ها
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: release-${{ github.event.inputs.past_run_id }} # تگ بر اساس همان آیدی ران ساخته می‌شود
-        name: "Release for Run #${{ github.event.inputs.past_run_id }}"
-        draft: false
-        prerelease: false
-        files: |
-          split_assets/*
+    # ۳. ساخت ریلیس و آپلود تک‌تک پارت‌ها با نمایش درصد پیشرفت هر کدام
+    - name: Create Release and Upload Assets with Progress
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TAG_NAME="release-${{ github.event.inputs.past_run_id }}"
+        
+        echo "=== در حال ساخت Release جدید... ==="
+        # ساخت یک ریلیس خام از طریق API
+        RELEASE_ID=$(curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{\"tag_name\":\"$TAG_NAME\",\"name\":\"Release for Run #$TAG_NAME\",\"draft\":false,\"prerelease\":false}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases" \
+          | jq -r '.id')
+          
+        echo "ریلیس با موفقیت ساخته شد. شناسه ریلیس: $RELEASE_ID"
+        
+        echo "=== در حال آپلود پارت‌ها به Release... ==="
+        cd split_assets
+        for asset in *; do
+          if [ -f "$asset" ]; then
+            echo "--------------------------------------------------"
+            echo "آپلود فایل: $asset"
+            # آپلود هرفایل با استفاده از curl و فلگ -# برای نمایش پیشرفت آپلود
+            curl -# -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$asset" \
+              "https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=$asset"
+            echo -e "\nآپلود $asset به پایان رسید."
+          fi
+        done

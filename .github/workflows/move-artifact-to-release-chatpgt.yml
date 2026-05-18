@@ -117,7 +117,7 @@ jobs:
 
             echo "Splitting huge archive..."
 
-            split -b 1900M \
+            split -b 300M \
               --numeric-suffixes=1 \
               --suffix-length=3 \
               artifact.tar.gz \
